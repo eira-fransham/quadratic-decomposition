@@ -15,7 +15,6 @@ pub struct Canvas {
     curve_pipeline: curve::Pipeline,
     blit_pipeline: blit::Pipeline,
     intermediate_buffer: wgpu::TextureView,
-    tick: u64,
 }
 
 pub struct Options {
@@ -98,7 +97,6 @@ impl Canvas {
             blit_pipeline,
             intermediate_buffer,
             blit_verts,
-            tick: 0,
         }
     }
 
@@ -120,6 +118,8 @@ impl Canvas {
             label: Some("render"),
         });
 
+        // Specified in screen coordinates. This code assumes a square screen right now but
+        // extending it to support arbitrary aspect ratios would be relatively trivial.
         let width: f32 = 0.05;
 
         self.vertices.clear();
@@ -135,6 +135,10 @@ impl Canvas {
                 .tuple_windows()
                 .step_by(2)
                 .flat_map(|(start, control, end)| {
+                    /// Calculates a quadratic bezier that passes through the start and end
+                    /// point at t=0 and t=1 respectively, and passes through the midpoint
+                    /// at t=midpoint_t. It doesn't take gradient into account, which leads
+                    /// to discontinuities and should be addressed.
                     fn calc_quadratic(
                         start: Vector2<f32>,
                         mid: Vector2<f32>,
@@ -166,31 +170,37 @@ impl Canvas {
                         end: Vector2<f32>,
                         t: f32,
                     ) -> Vector2<f32> {
+                        // Basic derivation of bezier formula
                         let tangent = (2. * (1. - t) * (control - start)
                             + 2. * t * (end - control))
                             .normalize();
 
+                        // Rotate 90 degrees
                         Vector2::from((-tangent.y, tangent.x))
                     }
 
+                    /// Triangulate a quad. This function is extremely bad and
+                    /// should handle automatically generating correct vertices
+                    /// for both clockwise and counter-clockwise quads.
                     fn quad(input: [Vector2<f32>; 4]) -> [Vector2<f32>; 6] {
                         [input[0], input[2], input[3], input[3], input[1], input[0]]
                     }
 
+                    // TODO: This only works for counterclockwise curves, but it shouldn't be too
+                    //       difficult to make it work for clockwise curves. This would probably
+                    //       make it look better for extreme angles, too, as these issues seem
+                    //       to be connected.
                     (0..num_points)
+                        // We step by 2 but triangulate 3 points from each step, as the end of 1 curve
+                        // is the start of the next but the control points are not shared. The points
+                        // look like:
+                        //
+                        // [start1, control1, end1/start2, control2, end2/start3, ..]
                         .step_by(2)
                         .flat_map(|i| {
                             let i = i as f32 * dt;
 
-                            // const DEGREE: f32 = 1.3;
-
                             let (a, b, c) = (i, i + dt, i + dt * 2.);
-                            // TODO
-                            // let (a, b, c) = (
-                            //     ((a.abs() - 0.5).powf(DEGREE) / 0.5f32.powf(DEGREE - 1.)) * a.signum() + 0.5,
-                            //     ((b.abs() - 0.5).powf(DEGREE) / 0.5f32.powf(DEGREE - 1.)) * b.signum() + 0.5,
-                            //     ((c.abs() - 0.5).powf(DEGREE) / 0.5f32.powf(DEGREE - 1.)) * c.signum() + 0.5,
-                            // );
 
                             let (a_point, b_point, c_point) = (
                                 point_on_quadratic(start, control, end, a),
@@ -203,6 +213,10 @@ impl Canvas {
                                 normal_at(start, control, end, c),
                             );
 
+                            // TODO: This leads to weird C1 discontinuities, so we might want to solve for
+                            //       gradient at the start and end and minimise positional error, or have
+                            //       some other way to normalise the gradient between segments to maintain
+                            //       C1 continuity.
                             let perc = (b - a) / (c - a);
                             let inner = calc_quadratic(
                                 a_point + a_norm * width,
@@ -289,7 +303,6 @@ impl Canvas {
                 }),
         );
 
-        self.tick += 1;
         self.indices.append(verts.start as u16..verts.end as u16);
 
         self.vertices.update(device, &mut encoder);

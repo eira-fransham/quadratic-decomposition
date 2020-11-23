@@ -1,3 +1,16 @@
+//! # Pipeline defintions
+//!
+//! This module defines any rendering pipelines we need, as well as some shared helpers.
+//! Each pipeline is defined as a module, exporting a `Pipeline` type. Usually this is
+//! just re-exporting the top-level `Pipeline` struct but if a pipeline does not need
+//! a bind group (or if we later add extra metadata that some pipelines need and others
+//! do not) then they would use their individual pipeline typedefs to express this.
+//!
+//! You can see that because the `curve` pipeline has no uniforms, it does not need a
+//! bind group and therefore exports `Pipeline<()>`. We can later use the type system
+//! so that the consumer of the pipeline doesn't need to know whether the pipeline
+//! needs a bind group bound or not.
+
 trait ShaderModuleSourceExt<'a> {
     fn as_ref<'b: 'a>(&'b self) -> wgpu::ShaderModuleSource<'b>;
 }
@@ -16,6 +29,7 @@ pub struct Pipeline<BindGroup = wgpu::BindGroup> {
     pub pipeline: wgpu::RenderPipeline,
 }
 
+/// A trivial helper type to allow us to easily generate sequential integers.
 #[derive(Default, Clone)]
 struct BindId {
     cur: u16,
@@ -34,7 +48,6 @@ impl BindId {
 
 const WINDING_MODE: wgpu::FrontFace = wgpu::FrontFace::Ccw;
 
-pub const DEPTH_FORMAT: Option<wgpu::TextureFormat> = None;
 pub const SWAPCHAIN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 
 /// This is responsible for rendering the curves themselves. The XOR behaviour of overlapping
@@ -148,12 +161,14 @@ pub mod curve {
     }
 }
 
-/// This renders from the intermediate buffer into the output swapchain. It requires HDR
-/// alpha to correctly handle the XOR overlapping of SVGs, as the intermediate buffer
-/// uses additive blending. Eventually we can use this pass to reuse the rendered shape
-/// in multiple places across the image.
+/// This renders from the intermediate buffer into the output swapchain. In the curve pass, the unrendered
+/// parts of the curve are rendered with negative alpha. This means that for the blit shader to correctly
+/// render the generated texture, sRGBA is required so that negative alpha can be expressed (technically
+/// you could do it with only unsigned RGBA but it would add an ordering constraint on the rendering of
+/// the shapes). We use floats here because it makes testing easier, but this could probably even be done
+/// with `Rgba8Sint` or `Rgba8Snorm`.
 ///
-/// This should probably also be where we handle FXAA
+/// This should probably also be where we handle FXAA.
 pub mod blit {
     use super::ShaderModuleSourceExt;
     use lazy_static::lazy_static;
